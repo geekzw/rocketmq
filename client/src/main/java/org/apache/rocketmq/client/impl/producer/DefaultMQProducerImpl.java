@@ -526,6 +526,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         long beginTimestampFirst = System.currentTimeMillis();
         long beginTimestampPrev = beginTimestampFirst;
         long endTimestamp = beginTimestampFirst;
+        //尝试获取topic信息，具体逻辑看方法注释
         TopicPublishInfo topicPublishInfo = this.tryToFindTopicPublishInfo(msg.getTopic());
         if (topicPublishInfo != null && topicPublishInfo.ok()) {
             boolean callTimeout = false;
@@ -535,7 +536,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             //重试次数，同步配置+1  异步就一次
             int timesTotal = communicationMode == CommunicationMode.SYNC ? 1 + this.defaultMQProducer.getRetryTimesWhenSendFailed() : 1;
             int times = 0;
-            //每次重试，记录下发往那个queue
+            //每次重试，记录下发往哪个queue
             String[] brokersSent = new String[timesTotal];
             for (; times < timesTotal; times++) {
                 //获取上次的brokerName，首次为空
@@ -664,6 +665,13 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             null).setResponseCode(ClientErrorCode.NOT_FOUND_TOPIC_EXCEPTION);
     }
 
+    /**
+     * 先从缓存中获取topic的信息，如果获取不到，则从nameServer中获取
+     * 这里有两次从nameServer获取topic信息，两次区别，可能要看下nameServer代码
+     *
+     * @param topic
+     * @return
+     */
     private TopicPublishInfo tryToFindTopicPublishInfo(final String topic) {
         TopicPublishInfo topicPublishInfo = this.topicPublishInfoTable.get(topic);
         if (null == topicPublishInfo || !topicPublishInfo.ok()) {

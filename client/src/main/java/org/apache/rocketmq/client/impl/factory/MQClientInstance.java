@@ -585,17 +585,29 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 从nameServer更新topic信息
+     * 获取默认topic信息
+     * 获取传入的topic信息
+     * @param topic
+     * @param isDefault
+     * @param defaultMQProducer
+     * @return
+     */
     public boolean updateTopicRouteInfoFromNameServer(final String topic, boolean isDefault,
         DefaultMQProducer defaultMQProducer) {
         try {
+            //为什么要控制并发？缓存都是用的并发map，应该是支持并发存取的，多个topic之间也无关联
             if (this.lockNamesrv.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     TopicRouteData topicRouteData;
                     if (isDefault && defaultMQProducer != null) {
+                        //这里貌似是没有topic自动创建的逻辑，还要根据nameserver具体分析
                         topicRouteData = this.mQClientAPIImpl.getDefaultTopicRouteInfoFromNameServer(defaultMQProducer.getCreateTopicKey(),
                             1000 * 3);
                         if (topicRouteData != null) {
                             for (QueueData data : topicRouteData.getQueueDatas()) {
+                                //获取队列数，根据producer设置的队列数和从nameserver获取的队列数，取小的那个
                                 int queueNums = Math.min(defaultMQProducer.getDefaultTopicQueueNums(), data.getReadQueueNums());
                                 data.setReadQueueNums(queueNums);
                                 data.setWriteQueueNums(queueNums);
@@ -606,16 +618,21 @@ public class MQClientInstance {
                     }
                     if (topicRouteData != null) {
                         TopicRouteData old = this.topicRouteTable.get(topic);
+                        //如果已经缓存过这个topic信息，那么比较这个topic是否需要更新
+                        //这里比较的是新老topicRouteData内容是否相同，具体可以看topicRouteData重新的equals方法
                         boolean changed = topicRouteDataIsChange(old, topicRouteData);
                         if (!changed) {
+                            //这里是从具体的producer实例中尝试获取此topic信息，如果获取不到或者非正常，则判定为需要更新
+                            //来到这里，基本上是要更新的，目前是从producer发消息链路跟进来的，只有producer中获取不到topic信息的时候，才会调用这个方法
+                            //从远端nameserver获取topic信息，那么获取到之后，肯定要更新到producer中
                             changed = this.isNeedUpdateTopicRouteInfo(topic);
                         } else {
                             log.info("the topic[{}] route info changed, old[{}] ,new[{}]", topic, old, topicRouteData);
                         }
-
+                        //如果需要更新，那分别更新生产者和消费者相关信息
                         if (changed) {
                             TopicRouteData cloneTopicRouteData = topicRouteData.cloneTopicRouteData();
-
+                            //更新broker信息
                             for (BrokerData bd : topicRouteData.getBrokerDatas()) {
                                 this.brokerAddrTable.put(bd.getBrokerName(), bd.getBrokerAddrs());
                             }
@@ -624,6 +641,7 @@ public class MQClientInstance {
                             {
                                 TopicPublishInfo publishInfo = topicRouteData2TopicPublishInfo(topic, topicRouteData);
                                 publishInfo.setHaveTopicRouterInfo(true);
+                                //此处缓存的MQProducerInner就是DefaultMQProducerImpl
                                 Iterator<Entry<String, MQProducerInner>> it = this.producerTable.entrySet().iterator();
                                 while (it.hasNext()) {
                                     Entry<String, MQProducerInner> entry = it.next();
@@ -778,6 +796,12 @@ public class MQClientInstance {
 
     }
 
+    /**
+     * 是否需要更新topic信息，这里从缓存的producertable里取出所有的producer实例
+     * 获取实例中缓存的此topic信息，如果获取不到，或者是非正常状态，那么就需要更新
+     * @param topic
+     * @return
+     */
     private boolean isNeedUpdateTopicRouteInfo(final String topic) {
         boolean result = false;
         {
